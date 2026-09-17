@@ -11,40 +11,58 @@ constexpr float sliderOffset=82,sliderInset=rowInset-12;
 constexpr float suppressionTop=processingTop,gateTop=processingTop+rowHeight+rowGap;
 constexpr float strengthSliderTop=suppressionTop+sliderOffset,gateSliderTop=gateTop+sliderOffset;
 }
-float Window::maxScroll() const {return voice_?0.f:std::max(0.f,contentHeight-viewportHeight_);}
+float Window::maxScroll() const {return std::max(0.f,pageHeight()-viewportHeight_);}
 void Window::layout() {
     RECT client{};GetClientRect(hwnd_,&client);width_=client.right/scale();height_=client.bottom/scale();
-    sidebar_=width_<900?200.f:240.f;contentWidth_=std::max(380.f,width_-sidebar_-64);viewportHeight_=std::max(1.f,height_-headerHeight-8);
+    sidebar_=220.f;contentWidth_=std::max(380.f,width_-sidebar_-64);viewportHeight_=std::max(1.f,height_-headerHeight-8);
     scroll_=std::clamp(scroll_,0.f,maxScroll());scrollTarget_=std::clamp(scrollTarget_,0.f,maxScroll());
     KillTimer(hwnd_,scrollTimer);scrolling_=false;scrollTarget_=scroll_;
-    MoveWindow(microphoneNav_,px(12),px(88),px(sidebar_-24),px(46),TRUE);
-    MoveWindow(voiceNav_,px(12),px(142),px(sidebar_-24),px(46),TRUE);
-    MoveWindow(content_,px(sidebar_+32),px(headerHeight),px(contentWidth_),px(viewportHeight_),FALSE);
-    ShowWindow(content_,voice_?SW_HIDE:SW_SHOW);
+    {
+        LayoutBatch batch(4);
+        batch.move(microphoneNav_,px(12),px(88),px(sidebar_-24),px(46));
+        batch.move(voiceNav_,px(12),px(142),px(sidebar_-24),px(46));
+        batch.move(soundNav_,px(12),px(196),px(sidebar_-24),px(46));
+        batch.move(content_,px(sidebar_+32),px(headerHeight),px(contentWidth_),px(viewportHeight_));
+    }
     positionControls();
+    for(auto h:{microphoneNav_,voiceNav_,soundNav_})InvalidateRect(h,nullptr,FALSE);
     auto resize=[](ID2D1HwndRenderTarget* target,UINT w,UINT h){if(target){auto s=target->GetPixelSize();if(s.width!=w||s.height!=h)target->Resize(D2D1::SizeU(w,h));}};
     resize(target_.Get(),client.right,client.bottom);resize(contentTarget_.Get(),px(contentWidth_),px(viewportHeight_));
     InvalidateRect(hwnd_,nullptr,FALSE);
 }
 void Window::positionControls() {
-    const float span=contentWidth_,column=(span-24)/2;
-    HDWP batch=BeginDeferWindowPos(8);
-    auto pos=[&](HWND h,float x,float y,float w,float height){batch=DeferWindowPos(batch,h,nullptr,px(x),px(top(y)),px(w),px(height),SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOCOPYBITS|SWP_NOREDRAW);};
-    pos(input_,0,42,column,260);pos(listener_,column+24,42,column,230);
-    pos(test_,0,116,174,42);pos(setup_,span-117,195,117,24);
-    auto processingRow=[&](HWND toggle,HWND slider,float y){
-        pos(toggle,span-rowInset-44,y+headingOffset,46,headingHeight);
-        pos(slider,sliderInset,y+sliderOffset,span-2*sliderInset,30);
-    };
-    processingRow(suppression_,strength_,suppressionTop);
-    processingRow(gate_,threshold_,gateTop);
-    if(batch)EndDeferWindowPos(batch);
-    ShowWindow(setup_,state_.devices.cables.empty()?SW_SHOW:SW_HIDE);
+    {
+        LayoutBatch batch(int(30+clipTiles_.size()*2));
+        for(auto h:{input_,listener_,suppression_,gate_,strength_,threshold_,test_})batch.show(h,page_==Page::Microphone);
+        batch.show(setup_,page_==Page::Microphone&&state_.devices.cables.empty());
+        for(auto h:voiceControls_)batch.show(h,page_==Page::Voice);
+        for(auto h:soundControls_){
+            const bool details=h==clipName_||h==clipEmoji_||h==closeClip_||h==removeClip_;
+            batch.show(h,page_==Page::Soundboard&&(!details||selectedClip_>=0));
+        }
+        for(auto h:clipTiles_)batch.show(h,page_==Page::Soundboard);
+        for(auto h:clipSettings_)batch.show(h,page_==Page::Soundboard);
+        if(page_!=Page::Microphone)layoutVoicePages(batch);
+        else{
+            const float span=contentWidth_,column=(span-24)/2;
+            auto pos=[&](HWND h,float x,float y,float w,float height){batch.move(h,px(x),px(top(y)),px(w),px(height));};
+            pos(input_,0,42,column,260);pos(listener_,column+24,42,column,230);
+            pos(test_,0,116,174,42);pos(setup_,span-117,195,117,24);
+            auto processingRow=[&](HWND toggle,HWND slider,float y){
+                pos(toggle,span-rowInset-44,y+headingOffset,46,headingHeight);
+                pos(slider,sliderInset,y+sliderOffset,span-2*sliderInset,30);
+            };
+            processingRow(suppression_,strength_,suppressionTop);
+            processingRow(gate_,threshold_,gateTop);
+        }
+    }
     RedrawWindow(content_,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN);
     RECT bar{px(width_-22),px(headerHeight),px(width_),px(height_)};InvalidateRect(hwnd_,&bar,FALSE);
 }
 void Window::scrollTo(float position,bool animate) {
-    scrollTarget_=std::clamp(position,0.f,maxScroll());
+    const float target=std::clamp(position,0.f,maxScroll());
+    if(target==scrollTarget_&&(animate||scroll_==target))return;
+    scrollTarget_=target;
     BOOL effects=TRUE;SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,&effects,0);
     if(!animate||!effects){KillTimer(hwnd_,scrollTimer);scrolling_=false;scroll_=scrollTarget_;positionControls();return;}
     scrollFrom_=scroll_;scrollStarted_=GetTickCount64();scrolling_=true;SetTimer(hwnd_,scrollTimer,16,nullptr);
@@ -60,7 +78,7 @@ void Window::paint() {
     PAINTSTRUCT ps{};BeginPaint(hwnd_,&ps);
     if(!target_){RECT r{};GetClientRect(hwnd_,&r);
         auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,D2D1::PixelFormat(),float(dpi_),float(dpi_));
-        if(FAILED(factory_->CreateHwndRenderTarget(properties,D2D1::HwndRenderTargetProperties(hwnd_,D2D1::SizeU(r.right,r.bottom)),&target_))){EndPaint(hwnd_,&ps);return;}}
+        if(FAILED(factory_->CreateHwndRenderTarget(properties,D2D1::HwndRenderTargetProperties(hwnd_,D2D1::SizeU(r.right,r.bottom),D2D1_PRESENT_OPTIONS(D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS|D2D1_PRESENT_OPTIONS_IMMEDIATELY)),&target_))){EndPaint(hwnd_,&ps);return;}}
     const auto& p=theme_.colors();target_->BeginDraw();target_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     target_->PushAxisAlignedClip({ps.rcPaint.left/scale(),ps.rcPaint.top/scale(),ps.rcPaint.right/scale(),ps.rcPaint.bottom/scale()},D2D1_ANTIALIAS_MODE_ALIASED);
     target_->Clear(p.background);ComPtr<ID2D1SolidColorBrush> brush;target_->CreateSolidColorBrush(p.sidebar,&brush);
@@ -68,12 +86,14 @@ void Window::paint() {
     constexpr float heights[]={9,20,30,18,8};brush->SetColor(p.accent);
     for(int i=0;i<5;++i)target_->FillRoundedRectangle(D2D1::RoundedRect({25.f+i*5,48-heights[i]/2,28.f+i*5,48+heights[i]/2},1.5f,1.5f),brush.Get());
     label(target_.Get(),L"Gate",{64,27,sidebar_-16,59},21,p.text,true);
-    if(paused_||!state_.capturing)label(target_.Get(),paused_?L"Processing paused":L"Microphone unavailable",{24,height_-44,sidebar_-18,height_-18},11.5f,p.secondary);
+    brush->SetColor(paused_?p.secondary:state_.cableActive?p.accent:p.warning);
+    target_->FillEllipse(D2D1::Ellipse({25,height_-30},3.5f,3.5f),brush.Get());
+    label(target_.Get(),paused_?L"Processing paused":state_.cableActive?L"CABLE Output connected":L"Local playback only",{37,height_-44,sidebar_-14,height_-18},11,p.secondary);
     const float left=sidebar_+32;
-    label(target_.Get(),voice_?L"Voice":L"Microphone",{left,26,width_-32,68},30,p.text,true);
-    label(target_.Get(),voice_?L"Voice effects are not available yet.":L"Reduce background noise from your microphone.",{left,72,width_-32,99},15.5f,p.secondary);
+    label(target_.Get(),page_==Page::Voice?L"Voice Changer":page_==Page::Soundboard?L"Soundboard":L"Microphone",{left,26,width_-32,68},30,p.text,true);
+    label(target_.Get(),page_==Page::Voice?L"Transform your voice in real time.":page_==Page::Soundboard?L"Play your sound clips instantly.":L"Reduce background noise from your microphone.",{left,72,width_-32,99},15.5f,p.secondary);
     if(maxScroll()>0){
-        const float thumb=std::max(32.f,viewportHeight_*viewportHeight_/contentHeight);
+        const float thumb=std::max(32.f,viewportHeight_*viewportHeight_/pageHeight());
         const float y=headerHeight+(viewportHeight_-thumb)*scroll_/maxScroll();
         brush->SetColor(draggingScroll_?p.secondary:p.track);
         target_->FillRoundedRectangle(D2D1::RoundedRect({width_-14,y,width_-9,y+thumb},2.5f,2.5f),brush.Get());
@@ -84,12 +104,15 @@ void Window::paintContent() {
     PAINTSTRUCT ps{};BeginPaint(content_,&ps);
     if(!contentTarget_){RECT r{};GetClientRect(content_,&r);
         auto properties=D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,D2D1::PixelFormat(),float(dpi_),float(dpi_));
-        if(FAILED(factory_->CreateHwndRenderTarget(properties,D2D1::HwndRenderTargetProperties(content_,D2D1::SizeU(r.right,r.bottom)),&contentTarget_))){EndPaint(content_,&ps);return;}}
+        if(FAILED(factory_->CreateHwndRenderTarget(properties,D2D1::HwndRenderTargetProperties(content_,D2D1::SizeU(r.right,r.bottom),D2D1_PRESENT_OPTIONS(D2D1_PRESENT_OPTIONS_RETAIN_CONTENTS|D2D1_PRESENT_OPTIONS_IMMEDIATELY)),&contentTarget_))){EndPaint(content_,&ps);return;}}
     auto* target=contentTarget_.Get();const auto& p=theme_.colors();const float span=contentWidth_;
     target->BeginDraw();target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     target->PushAxisAlignedClip({ps.rcPaint.left/scale(),ps.rcPaint.top/scale(),ps.rcPaint.right/scale(),ps.rcPaint.bottom/scale()},D2D1_ANTIALIAS_MODE_ALIASED);
     target->Clear(p.background);ComPtr<ID2D1SolidColorBrush> brush;target->CreateSolidColorBrush(p.card,&brush);
     auto text=[&](const std::wstring& s,float x,float y,float w,float h,float size,D2D1_COLOR_F c,bool bold=false,bool wrap=false){label(target,s,{x,top(y),x+w,top(y+h)},size,c,bold,DWRITE_TEXT_ALIGNMENT_LEADING,wrap);};
+    if(page_!=Page::Microphone){
+        paintVoicePages(target);target->PopAxisAlignedClip();if(target->EndDraw()==D2DERR_RECREATE_TARGET)contentTarget_.Reset();EndPaint(content_,&ps);return;
+    }
     const float column=(span-24)/2;
     text(L"Microphone",0,8,column,26,16,p.text,true);
     text(L"Listening Device",column+24,8,column,26,16,p.text,true);
@@ -142,7 +165,7 @@ LRESULT CALLBACK Window::contentProcedure(HWND window,UINT message,WPARAM w,LPAR
     if(!self)return DefWindowProcW(window,message,w,l);
     if(message==WM_ERASEBKGND)return 1;
     if(message==WM_PAINT){try{self->paintContent();}catch(...){}return 0;}
-    if(message==WM_COMMAND||message==WM_NOTIFY||message==WM_DRAWITEM||message==WM_MEASUREITEM||message==WM_HSCROLL||message==WM_MOUSEWHEEL||message==WM_CTLCOLORLISTBOX||message==WM_CTLCOLORSTATIC||message==WM_CTLCOLORBTN)
+    if(message==WM_COMMAND||message==WM_NOTIFY||message==WM_DRAWITEM||message==WM_MEASUREITEM||message==WM_HSCROLL||message==WM_MOUSEWHEEL||message==WM_CTLCOLOREDIT||message==WM_CTLCOLORLISTBOX||message==WM_CTLCOLORSTATIC||message==WM_CTLCOLORBTN)
         return SendMessageW(self->hwnd_,message,w,l);
     return DefWindowProcW(window,message,w,l);
 }

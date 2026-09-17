@@ -1,6 +1,7 @@
 #include "audio/Engine.h"
 #include "audio/Resampler.h"
 #include "audio/SpscQueue.h"
+#include "audio/ClipPlayer.h"
 #include <audioclient.h>
 #include <avrt.h>
 #include <ksmedia.h>
@@ -250,7 +251,16 @@ struct Engine::Impl {
     explicit Impl(Diagnostics& stats) : stats(stats), cable(stats,wake.value), listener(stats,wake.value) {}
     Diagnostics& stats;
     HWND window{};
-    Handle wake{false}, quit{true}, captureStop{true};
+    Handle wake{false}, quit{true}, captureStop{true}, mixerStop{true};
+    SpscQueue<frameSize*12> microphoneQueue;
+    ClipPlayer clips;
+    std::thread mixerWorker;
+    std::atomic<uint32_t> voiceParameters{packVoice({})};
+    std::atomic<bool> hearSounds{true},hearVoice{false};
+    std::atomic<bool> soundboardVisible{false};
+    std::wstring requestedClip,requestedPath,activeClip;
+    uint64_t clipRevision=0,appliedClipRevision=0;
+    ULONGLONG soundDrainUntil=0;
     std::atomic<bool> devicesChanged{true}, captureFailed{false};
     std::atomic<uint32_t> parameters{pack({})};
     mutable std::mutex mutex;
@@ -269,6 +279,52 @@ struct Engine::Impl {
     void notify(const EngineStatus& state) {
         { std::lock_guard lock(mutex); published = state; }
         if (window) PostMessageW(window, audioChanged, 0, 0);
+    }
+    void stopMixer() {
+        SetEvent(mixerStop.value);
+        if(mixerWorker.joinable())mixerWorker.join();
+    }
+    void startMixer() {
+        if(mixerWorker.joinable())return;
+        ResetEvent(mixerStop.value);
+        // Allocate and configure DSP before entering the real-time loop.
+        auto effect=std::make_unique<VoiceEffect>();
+        mixerWorker=std::thread([this,effect=std::move(effect)]() mutable {
+            Apartment apartment;Priority priority;
+            Handle timer;timer.value=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
+            if(!timer.value){timer.value=CreateWaitableTimerW(nullptr,FALSE,nullptr);}
+            if(!timer.value)return;
+            std::array<float,frameSize> mic{},voice{},sound{},toCable{},toListener{};
+            LARGE_INTEGER frequency{},now{};QueryPerformanceFrequency(&frequency);QueryPerformanceCounter(&now);
+            double next=double(now.QuadPart),period=double(frequency.QuadPart)/100.;
+            bool primed=false;unsigned blocks=0;
+            HANDLE events[]={mixerStop.value,timer.value};
+            while(WaitForSingleObject(mixerStop.value,0)!=WAIT_OBJECT_0){
+                mic.fill(0);
+                if(!primed&&microphoneQueue.size()>=frameSize*2)primed=true;
+                if(primed){
+                    if(microphoneQueue.size()>frameSize*8){while(microphoneQueue.size()>frameSize*2)microphoneQueue.pop(mic);++stats.overflows;}
+                    mic.fill(0);
+                    if(microphoneQueue.pop(mic)<frameSize)primed=false;
+                }
+                effect->process(mic.data(),voice.data(),unpackVoice(voiceParameters.load()));
+                clips.read(sound.data(),frameSize);
+                mixAudio(voice.data(),sound.data(),toCable.data(),toListener.data(),frameSize,
+                    .8f,hearVoice.load(),hearSounds.load());
+                cable.push(toCable.data());listener.push(toListener.data());
+                // The mixer follows the input clock slowly. Outputs retain their
+                // independent OS clock correction. No samples are resampled here.
+                if(++blocks%100==0){
+                    const double correction=primed?std::clamp((double(microphoneQueue.size())-frameSize)/sampleRate*.02,-.002,.002):0.;
+                    period=double(frequency.QuadPart)/100.*(1.-correction);
+                }
+                next+=period;QueryPerformanceCounter(&now);
+                if(next<now.QuadPart-period*2)next=double(now.QuadPart)+period;
+                LARGE_INTEGER due{};due.QuadPart=-std::max<LONGLONG>(1,LONGLONG((next-now.QuadPart)*10000000./frequency.QuadPart));
+                if(!SetWaitableTimer(timer.value,&due,0,nullptr,nullptr,FALSE))break;
+                if(WaitForMultipleObjects(2,events,FALSE,1000)!=WAIT_OBJECT_0+1)break;
+            }
+        });
     }
     void stopCapture() {
         SetEvent(captureStop.value);
@@ -332,7 +388,7 @@ struct Engine::Impl {
                                     while(elapsed>max && !stats.maxProcessingUs.compare_exchange_weak(max,elapsed)) {}
                                     if (elapsed>10000) ++stats.overruns;
                                     ++stats.blocks; stats.inputLevel=meter();
-                                    cable.push(output.data()); listener.push(output.data()); assembled=0;
+                                    if(microphoneQueue.push(output)!=frameSize)++stats.overflows; assembled=0;
                                 }
                             }
                             if (!in && !out) check(E_FAIL);
@@ -359,7 +415,7 @@ struct Engine::Impl {
             while (WaitForSingleObject(quit.value,0)!=WAIT_OBJECT_0) {
                 bool deviceEvent=devicesChanged.exchange(false);
                 if (deviceEvent) state.devices=enumerateDevices();
-                std::wstring mic, listening; bool test, stopped;
+                std::wstring mic, listening,clip,path; bool test, stopped;uint64_t revision;
                 {
                     std::lock_guard lock(mutex);
                     if (firstSelection) {
@@ -368,12 +424,25 @@ struct Engine::Impl {
                         firstSelection=false;
                     }
                     mic=requestedMic; listening=requestedListener; test=wantTest; stopped=paused||suspended;
-                    state.paused=stopped;
+                    state.paused=stopped;clip=requestedClip;path=requestedPath;revision=clipRevision;
                 }
+                if(stopped){
+                    stopMixer();clips.stop();activeClip.clear();cable.stop();listener.stop();activeCable.clear();activeListener.clear();
+                    {std::lock_guard lock(mutex);requestedClip.clear();requestedPath.clear();appliedClipRevision=clipRevision;}
+                } else if(revision!=appliedClipRevision){
+                    clips.stop();activeClip.clear();state.soundMessage.clear();
+                    if(!clip.empty()){clips.start(path,true);activeClip=clip;}
+                    appliedClipRevision=revision;
+                }
+                if(!activeClip.empty()&&!clips.playing()){
+                    state.soundMessage=clips.error();activeClip.clear();soundDrainUntil=GetTickCount64()+100;
+                    std::lock_guard lock(mutex);if(clipRevision==appliedClipRevision){requestedClip.clear();requestedPath.clear();}
+                }
+                state.playingClip=activeClip;
                 state.microphoneId=mic; state.listeningId=listening;
                 const bool micExists=find(state.devices.microphones,mic)!=nullptr;
                 if (capture && (stopped || activeMic!=mic || !micExists || captureFailed)) {
-                    listener.stop(); cable.stop(); activeCable.clear(); activeListener.clear(); stopCapture();
+                    stopMixer();stopCapture();microphoneQueue.reset();
                     { std::lock_guard lock(mutex); wantTest=false; } test=false;
                     if (captureFailed) { ++stats.recoveries; state.routeMessage=L"Microphone interrupted. Re-select it or reconnect to retry."; }
                 }
@@ -387,43 +456,48 @@ struct Engine::Impl {
                 if (cable.failed) { cable.stop(); activeCable.clear(); ++stats.recoveries; }
                 const auto cableId=state.devices.cables.empty()?std::wstring{}:state.devices.cables.front().id;
                 if (!activeCable.empty() && activeCable!=cableId) { cable.stop(); activeCable.clear(); }
-                if (capture && !captureFailed && !cableId.empty() && !cable.active()) {
+                if (!stopped && !cableId.empty() && !cable.active()) {
                     try { cable.start(cableId); activeCable=cableId; }
                     catch(HRESULT hr) { cable.stop(); state.routeMessage=L"Cable unavailable: "+errorMessage(hr); }
                     catch(...) { cable.stop(); state.routeMessage=L"Could not initialize cable output."; }
                 }
-                if (capture && !captureFailed && cableId.empty()) state.routeMessage=L"VB-CABLE not found. Install it to use Gate in other apps.";
+                if (!stopped && cableId.empty()) state.routeMessage=L"VB-CABLE not found. Install it to use Gate in other apps.";
                 else if (cable.active()) state.routeMessage=L"Ready. Select CABLE Output as your microphone in other apps.";
                 const auto* outputDevice=find(state.devices.listeners,listening);
-                if (listener.failed || (listener.active() && (!test || activeListener!=listening || !outputDevice || !capture))) {
-                    const bool interrupted=listener.failed.load();
-                    listener.stop(); activeListener.clear();
-                    { std::lock_guard lock(mutex); wantTest=false; } test=false;
-                    if (!outputDevice) state.testMessage=L"Listening device unavailable. Select a device, then start the test.";
-                    else if (interrupted) state.testMessage=L"Listening output interrupted. Press Test Microphone to retry.";
+                if(!capture||captureFailed){test=false;std::lock_guard lock(mutex);wantTest=false;}
+                const bool soundListening=!stopped&&hearSounds.load()&&(clips.playing()||GetTickCount64()<soundDrainUntil);
+                // Prepare the route when the soundboard opens, rather than
+                // making the first click wait for endpoint initialization.
+                const bool warmListener=hearSounds.load()&&soundboardVisible.load();
+                const bool needListener=!stopped&&(test||soundListening||warmListener);
+                if(listener.failed||(listener.active()&&(!needListener||activeListener!=listening||!outputDevice))){
+                    const bool failed=listener.failed.load();listener.stop();activeListener.clear();
+                    if(failed||!outputDevice){test=false;std::lock_guard lock(mutex);wantTest=false;state.testMessage=L"Listening device unavailable. Check the device on the Microphone page.";}
                 }
-                if (test && !listener.active()) {
-                    if (capture && !captureFailed && outputDevice && !outputDevice->virtualRoute && listening!=cableId) {
-                        try { listener.start(listening); activeListener=listening; state.testMessage=L"Live test active"; }
-                        catch(HRESULT hr) { listener.stop(); state.testMessage=L"Cannot listen: "+errorMessage(hr); }
-                        catch(...) { listener.stop(); state.testMessage=L"Could not initialize listening output."; }
-                    } else state.testMessage=L"Select an available microphone and listening device first.";
-                    if (!listener.active()) { std::lock_guard lock(mutex); wantTest=false; }
+                if(needListener&&!listener.active()&&outputDevice&&!outputDevice->virtualRoute&&listening!=cableId){
+                    try{listener.start(listening);activeListener=listening;state.testMessage.clear();}
+                    catch(...){listener.stop();state.testMessage=L"Could not open the listening device.";test=false;std::lock_guard lock(mutex);wantTest=false;}
                 }
-                state.capturing=capture && !captureFailed; state.cableActive=cable.active(); state.testActive=listener.active();
-                if (!state.testActive && state.testMessage.find(L"Live test active") == 0) state.testMessage.clear();
+                if(test&&!listener.active()){test=false;std::lock_guard lock(mutex);wantTest=false;state.testMessage=L"Select an available listening device on the Microphone page.";}
+                if(soundListening&&!listener.active()&&!activeClip.empty())state.soundMessage=state.testMessage.empty()?L"Select a listening device on the Microphone page to hear sounds.":state.testMessage;
+                clips.release();
+                hearVoice=test&&listener.active();
+                state.capturing=capture&&!captureFailed;state.cableActive=cable.active();state.testActive=hearVoice.load();
+                state.soundsActive=soundListening&&listener.active();
+                if(!stopped&&(state.capturing||cable.active()||listener.active()||clips.playing()))startMixer();
+                else stopMixer();
                 notify(state);
                 DWORD wait;
                 do {
-                    wait=WaitForMultipleObjects(2,events,FALSE,state.capturing?1000:INFINITE);
+                    wait=WaitForMultipleObjects(2,events,FALSE,stopped?INFINITE:250);
                     if(wait==WAIT_TIMEOUT) { cable.adjustClock(); listener.adjustClock(); }
-                } while(wait==WAIT_TIMEOUT && !cable.failed && !listener.failed);
+                } while(false);
                 if(wait==WAIT_OBJECT_0) break;
             }
         } catch(HRESULT hr) { state.routeMessage=L"Audio initialization failed: "+errorMessage(hr); notify(state); }
           catch(...) { state.routeMessage=L"Audio initialization failed."; notify(state); }
         if(enumerator && notification) enumerator->UnregisterEndpointNotificationCallback(notification.Get());
-        listener.stop(); cable.stop(); stopCapture();
+        stopMixer();clips.stop();listener.stop(); cable.stop(); stopCapture();
     }
 };
 Engine::Engine():impl_(std::make_unique<Impl>(diagnostics_)) {}
@@ -445,6 +519,20 @@ void Engine::setTest(bool enabled) { {std::lock_guard lock(impl_->mutex);impl_->
 void Engine::setPaused(bool paused) { {std::lock_guard lock(impl_->mutex);impl_->paused=paused;if(paused)impl_->wantTest=false;} SetEvent(impl_->wake.value); }
 void Engine::setSuspended(bool suspended) { {std::lock_guard lock(impl_->mutex);impl_->suspended=suspended;if(suspended)impl_->wantTest=false;} SetEvent(impl_->wake.value); }
 void Engine::setParameters(Parameters p) noexcept { impl_->parameters=pack(p); }
+void Engine::setVoice(VoiceParameters p) noexcept {impl_->voiceParameters=packVoice(p);}
+void Engine::setHearSounds(bool hear) noexcept {impl_->hearSounds=hear;SetEvent(impl_->wake.value);}
+void Engine::setSoundboardVisible(bool visible) noexcept {impl_->soundboardVisible=visible;SetEvent(impl_->wake.value);}
+void Engine::playClip(std::wstring id,std::wstring path){
+    {std::lock_guard lock(impl_->mutex);if(impl_->paused||impl_->suspended)return;
+        if(impl_->requestedClip==id){impl_->requestedClip.clear();impl_->requestedPath.clear();}
+        else{impl_->requestedClip=std::move(id);impl_->requestedPath=std::move(path);}
+        ++impl_->clipRevision;}
+    SetEvent(impl_->wake.value);
+}
+void Engine::stopClips(){
+    {std::lock_guard lock(impl_->mutex);impl_->requestedClip.clear();impl_->requestedPath.clear();++impl_->clipRevision;}
+    SetEvent(impl_->wake.value);
+}
 EngineStatus Engine::status() const {std::lock_guard lock(impl_->mutex);return impl_->published;}
 #ifdef GATE_DEVELOPER_PROBES
 // Developer verification uses the same output implementation with digital silence.

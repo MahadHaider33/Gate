@@ -1,0 +1,7 @@
+#include <windows.h>
+201 RCDATA "sounds/air-horn.wav"
+203 RCDATA "sounds/drum-roll.wav"
+204 RCDATA "sounds/rimshot.wav"
+205 RCDATA "sounds/buzzer.wav"
+206 RCDATA "sounds/chime.wav"
+207 RCDATA "sounds/sad-trombone.wav"

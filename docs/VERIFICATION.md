@@ -17,7 +17,7 @@
 - [ ] Test without VB-CABLE installed; missing-device feedback is clear.
 - [ ] Device change/loss, pause, hide, suspend, and exit stop testing without auto-restart.
 - [ ] Microphone loss does not switch physical inputs without user selection.
-- [ ] No recording/replay UI, sample files, microphone history, or audio in diagnostics.
+- [ ] No microphone recording/history or audio in diagnostics; imported soundboard files remain separate.
 - [ ] Windows 10 22H2 and current Windows 11; USB/integrated/wired devices, 44.1/48/96 kHz; simultaneous capture.
 - [ ] Discord, Zoom, and at least two games receive CABLE Output.
 - [ ] Two-hour capture/cable/listening clock-drift test, bounded memory and latency.
@@ -37,3 +37,7 @@ Compare suppression candidates offline using licensed developer fixtures. WebRTC
 ## Release blockers
 
 Speech damage, blend artifacts, unstable drift correction, incorrect listening/cable routing, growing latency, significant game regressions, unresolved model redistribution rights, or confusing setup must be resolved before calling a release production ready.
+
+## Voice/soundboard development checks
+
+`gate_feature_tests` uses synthetic input and a temporary generated WAV to check normal/effects-off bypass, bounded effect output, independent cable/listening mixes, held playback, decoding completion, and stop clearing audio. It does not open a microphone or output device. The voice/soundboard update uses the release build, existing core tests, and these focused checks only; the manual matrix above is left to the user.

@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $lock = Get-Content (Join-Path $root 'dependencies.lock.json') -Raw | ConvertFrom-Json
-foreach ($name in @('rnnoise', 'speexdsp', 'q', 'infra')) {
+foreach ($name in @('rnnoise', 'speexdsp', 'q', 'infra', 'signalsmith-stretch', 'signalsmith-linear')) {
     $relative = if ($name -eq 'infra') { 'third_party/q/infra' } else { "third_party/$name" }
     $path = Join-Path $root $relative
     $entry = $lock.$name

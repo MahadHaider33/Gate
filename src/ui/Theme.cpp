@@ -13,10 +13,11 @@ void Theme::connect(HWND window) {
     refresh();
 }
 void Theme::refresh() {
-    bool dark=false;
-    try {if(settings_){auto fg=settings_.GetColorValue(winrt::Windows::UI::ViewManagement::UIColorType::Foreground);dark=(5*fg.G+2*fg.R+fg.B)>8*128;}}catch(...){}
-    palette_=dark?Palette{color(0x14191d),color(0x191f24),color(0x1c2227),color(0x272e35),color(0xf5f6f7),color(0xb3c0d4),color(0x2386ff),color(0x30373e),color(0x37424c),color(0x20dd77),color(0x25313c),color(0xf0bb68),color(0xffffff),true,false}
-        :Palette{color(0xfbf8f2),color(0xfffcf7),color(0xf7f3ea),color(0xfffcf6),color(0x291d16),color(0x6d645e),color(0xa77a24),color(0xe5ded2),color(0xe0dbd1),color(0xc4a045),color(0xf3ecdf),color(0x8c5619),color(0xffffff),false,false};
+    // Quiet Dark is Gate's selected visual theme, independent of the OS app theme.
+    const bool dark=true;
+    palette_={color(0x181b1e),color(0x15191b),color(0x202528),color(0x24292d),
+        color(0xf1f4f3),color(0xa1a9ad),color(0x86efc2),color(0x343a3e),
+        color(0x3c4248),color(0x86efc2),color(0x243b34),color(0xf08080),color(0x10241c),true,false};
     HIGHCONTRASTW hc{sizeof(hc)};SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(hc),&hc,0);
     if(hc.dwFlags&HCF_HIGHCONTRASTON){
         palette_={system(COLOR_WINDOW),system(COLOR_WINDOW),system(COLOR_WINDOW),system(COLOR_WINDOW),system(COLOR_WINDOWTEXT),system(COLOR_WINDOWTEXT),system(COLOR_HIGHLIGHT),system(COLOR_WINDOWTEXT),system(COLOR_GRAYTEXT),system(COLOR_HIGHLIGHT),system(COLOR_HIGHLIGHT),system(COLOR_WINDOWTEXT),system(COLOR_HIGHLIGHTTEXT),dark,true};

@@ -17,6 +17,16 @@ A microphone app for Windows 10 22H2 and Windows 11, x64.
 
 Testing works without VB-CABLE. You do not need to leave the test on for other apps to hear you.
 
+## Voice Changer and Soundboard
+
+- **Voice Changer:** choose Normal, Deep, High Pitch, Robot, Radio, or Echo. Adjust Intensity, or switch Voice Effects off while keeping the selected preset. Hear Myself shares the Microphone page's test control.
+- **Starter sounds:** Air Horn, Drum Roll, Rimshot, Buzzer, Chime, and Sad Trombone are included. These are original synthesized effects, available offline. Gate adds them once; renames and removals persist.
+- **Soundboard:** import WAV/MP3 files, then click a sound tile to play or stop it. Playing another sound replaces the current one. The selected sound's editor offers rename and remove.
+- **Hear Sounds:** plays clips through the listening device selected on the Microphone page, independently of Hear Myself. Clips use a fixed playback level.
+- Clips bypass microphone noise reduction, the gate, and voice effects. They work without a microphone; local playback also works without VB-CABLE. Pause, suspend, and exit stop playback without automatically restarting it.
+
+Imported copies live in `%LOCALAPPDATA%\Gate\Soundboard`. Removing a tile deletes its managed copy, never the original. Settings are saved under `HKCU\Software\Gate`. Microphone audio is never recorded. Pitch effects add processing latency; full listening/device compatibility verification remains manual.
+
 Closing the window leaves Gate running in the tray. Use the tray menu to pause or exit. Pausing stops audio sent to other apps.
 
 ## Build

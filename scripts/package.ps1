@@ -12,6 +12,8 @@ $files = [ordered]@{
     'licenses/SpeexDSP.txt' = 'third_party/speexdsp/COPYING'
     'licenses/Cycfi-Q.txt' = 'third_party/q/LICENSE'
     'licenses/Cycfi-infra.txt' = 'packaging/licenses/Cycfi-infra.txt'
+    'licenses/Signalsmith-Stretch.txt' = 'third_party/signalsmith-stretch/LICENSE.txt'
+    'licenses/Signalsmith-Linear.txt' = 'third_party/signalsmith-linear/LICENSE.txt'
 }
 foreach ($source in $files.Values) {
     if (!(Test-Path -LiteralPath (Join-Path $root $source) -PathType Leaf)) { throw "Missing package input: $source" }

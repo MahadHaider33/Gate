@@ -12,10 +12,12 @@ struct Device {
     bool virtualRoute = false;
     bool cable = false;
     bool speakers = false;
+    bool operator==(const Device&) const = default;
 };
 struct Devices {
     std::vector<Device> microphones, listeners, cables;
     std::wstring defaultMicrophone, defaultListener;
+    bool operator==(const Devices&) const = default;
 };
 bool isCableIdentity(const std::wstring& instanceId, const std::wstring& interfaceName);
 bool isVirtualIdentity(const std::wstring& instanceId, const std::wstring& interfaceName);
