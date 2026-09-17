@@ -1,0 +1,7 @@
+{
+  "rnnoise": { "url": "https://github.com/xiph/rnnoise.git", "commit": "70f1d256acd4b34a572f999a05c87bf00b67730d" },
+  "speexdsp": { "url": "https://github.com/xiph/speexdsp.git", "commit": "7a158783df74efe7c2d1c6ee8363c1e695c71226" },
+  "q": { "url": "https://github.com/cycfi/q.git", "commit": "0920556c6eacb0091634310950f0c0ff5d66434a" },
+  "infra": { "url": "https://github.com/cycfi/infra.git", "commit": "2dff97a4b107eced78e426152f5001a2331cb1cf" },
+  "model": { "url": "https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz", "sha256": "0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37" }
+}

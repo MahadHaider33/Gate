@@ -1,0 +1,20 @@
+# Build output and downloaded dependencies
+/build/
+/dist/
+/.tools/
+/third_party/
+/out/
+/cmake-build-*/
+
+# Local IDE and CMake settings
+/.vs/
+/CMakeUserPresets.json
+*.user
+*.suo
+
+# Compiler output
+*.obj
+*.pdb
+*.ilk
+*.pch
+*.idb

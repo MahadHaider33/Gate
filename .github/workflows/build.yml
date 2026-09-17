@@ -1,0 +1,32 @@
+name: Windows build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build tools and pinned dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --target .tools cmake==3.31.6 ninja==1.11.1.4
+          if ($LASTEXITCODE) { throw 'Build tool installation failed' }
+          ./scripts/bootstrap.ps1
+      - name: Build and core tests
+        shell: cmd
+        run: scripts\build.cmd
+      - name: Package unsigned artifacts
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Gate-windows-x64-unsigned
+          path: |
+            dist/*.zip
+          if-no-files-found: error

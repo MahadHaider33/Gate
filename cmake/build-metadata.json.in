@@ -1,0 +1,12 @@
+{
+  "product": "Gate",
+  "version": "@PROJECT_VERSION@",
+  "architecture": "x64",
+  "compiler": "@CMAKE_CXX_COMPILER_ID@",
+  "compilerVersion": "@CMAKE_CXX_COMPILER_VERSION@",
+  "windowsSdk": "10.0.26100.0",
+  "cmakeVersion": "@CMAKE_VERSION@",
+  "configuration": "@CMAKE_BUILD_TYPE@",
+  "dependencyLock": "dependencies.lock.json",
+  "signed": false
+}
