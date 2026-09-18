@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $stage = [IO.Path]::GetFullPath((Join-Path $root 'dist/Gate'))
-$archive = Join-Path $root 'dist/Gate-0.1.0-windows-x64.zip'
+$archive = Join-Path $root 'dist/Gate-0.1.1-windows-x64.zip'
 # Runtime allowlist: never recursively copy a build or dependency folder.
 $files = [ordered]@{
     'Gate.exe' = 'build/release/Gate.exe'

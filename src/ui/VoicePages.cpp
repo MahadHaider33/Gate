@@ -99,7 +99,6 @@ void Window::layoutVoicePages(LayoutBatch& batch){
         const float y=voiceSettingsTop(),half=(span-32)/2;
         pos(effectToggle_,half-48,y,46,28);pos(hearMyself_,span-48,y,46,28);
         pos(intensity_,0,y+132,span,30);
-        EnableWindow(intensity_,preferences_.voice.enabled&&preferences_.voice.preset!=VoicePreset::Normal);
     }else{
         const float grid=soundGridWidth();const unsigned columns=gridColumns();const float tile=(grid-14*float(columns-1))/float(columns);
         pos(import_,0,8,158,38);pos(stopSounds_,170,8,114,38);pos(hearSounds_,span-48,13,46,28);
@@ -180,9 +179,8 @@ bool Window::featureCommand(unsigned id,unsigned notification){
     if(notification!=BN_CLICKED)return false;
     if(id>=VoiceFirst&&id<VoiceFirst+6){
         const auto previous=unsigned(preferences_.voice.preset);
-        preferences_.voice.preset=VoicePreset(id-VoiceFirst);preferences_.voice.enabled=true;
-        SendMessageW(effectToggle_,BM_SETCHECK,BST_CHECKED,0);engine_.setVoice(preferences_.voice);
-        EnableWindow(intensity_,preferences_.voice.preset!=VoicePreset::Normal);
+        preferences_.voice.preset=VoicePreset(id-VoiceFirst);
+        engine_.setVoice(preferences_.voice);
         InvalidateRect(voiceTiles_[previous],nullptr,FALSE);InvalidateRect(voiceTiles_[id-VoiceFirst],nullptr,FALSE);
         save();return true;
     }
@@ -203,7 +201,7 @@ bool Window::featureCommand(unsigned id,unsigned notification){
     }
     switch(id){
     case SoundNav:setPage(Page::Soundboard);return true;
-    case EffectToggle:preferences_.voice.enabled=SendMessageW(effectToggle_,BM_GETCHECK,0,0)==BST_CHECKED;engine_.setVoice(preferences_.voice);EnableWindow(intensity_,preferences_.voice.enabled&&preferences_.voice.preset!=VoicePreset::Normal);save();return true;
+    case EffectToggle:preferences_.voice.enabled=SendMessageW(effectToggle_,BM_GETCHECK,0,0)==BST_CHECKED;engine_.setVoice(preferences_.voice);save();return true;
     case HearMyself:testRequested_=!testRequested_;testPending_=true;engine_.setTest(testRequested_);syncTest();return true;
     case Import:importClip();return true;
     case StopSounds:engine_.stopClips();return true;

@@ -211,14 +211,14 @@ void Window::paintControl(HWND control,HDC dc) {
             const bool playing=index<preferences_.clips.size()&&state_.playingClip==preferences_.clips[index].file;
             round({.5f,.5f,w-.5f,h-.5f},7,playing?p.selected:hover?blend(p.card,p.text,.035f):p.card);
             outline({.5f,.5f,w-.5f,h-.5f},7,playing?p.accent:p.border);
-            if(index<preferences_.clips.size())label(target,preferences_.clips[index].emoji,{12,22,w-12,72},30,p.accent,false,DWRITE_TEXT_ALIGNMENT_CENTER);
+            if(index<preferences_.clips.size())drawEmoji(target,preferences_.clips[index].emoji,{12,22,w-12,72},30);
             label(target,text,{14,79,w-14,106},14.5f,p.text,true);
             if(playing){round({w-26,h-13,w-22,h-7},1,p.accent);round({w-19,h-18,w-15,h-7},1,p.accent);}
 
         }
     }else if(control==clipEmoji_){
         if(hover)round({0,0,w,h},6,p.selected);
-        if(selectedClip_>=0)label(target,preferences_.clips[size_t(selectedClip_)].emoji,{0,0,w,h},28,p.accent,false,DWRITE_TEXT_ALIGNMENT_CENTER);
+        if(selectedClip_>=0)drawEmoji(target,preferences_.clips[size_t(selectedClip_)].emoji,{0,0,w,h},28);
     }else if(std::find(clipSettings_.begin(),clipSettings_.end(),control)!=clipSettings_.end()){
         const auto index=size_t(std::find(clipSettings_.begin(),clipSettings_.end(),control)-clipSettings_.begin());
         const bool playing=index<preferences_.clips.size()&&state_.playingClip==preferences_.clips[index].file;

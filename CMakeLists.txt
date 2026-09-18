@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(Gate VERSION 0.1.0 LANGUAGES C CXX RC)
+project(Gate VERSION 0.1.1 LANGUAGES C CXX RC)
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Gate requires Windows x64 and the MSVC toolchain.")
 endif()

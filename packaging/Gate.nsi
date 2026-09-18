@@ -1,7 +1,7 @@
 Unicode True
 !include "MUI2.nsh"
 Name "Gate"
-OutFile "..\dist\Gate-0.1.0-setup-x64.exe"
+OutFile "..\dist\Gate-0.1.1-setup-x64.exe"
 InstallDir "$LOCALAPPDATA\Programs\Gate"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -37,7 +37,7 @@ Section "Gate"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\Gate.lnk" "$INSTDIR\Gate.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Gate" "DisplayName" "Gate"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Gate" "DisplayVersion" "0.1.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Gate" "DisplayVersion" "0.1.1"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Gate" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Gate" "DisplayIcon" "$INSTDIR\Gate.exe"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Gate" "NoModify" 1

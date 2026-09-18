@@ -17,13 +17,15 @@ Controls
 Voice Changer
 Choose a preset and adjust Intensity. Hear Myself uses the microphone test.
 Turn Voice Effects off to keep your normal voice without losing the preset.
+Selecting another preset keeps the toggle unchanged. Intensity is always adjustable.
 
 Soundboard
 Includes Air Horn, Drum Roll, Rimshot, Buzzer, Chime, and Sad Trombone.
 These original synthesized sounds are built into Gate and work offline.
 They appear automatically once. Renames and removals are remembered.
 Import WAV/MP3 files. Click a tile to play or stop; another tile replaces it.
-Select a tile to rename or remove it.
+Open a tile's settings to rename or remove it. Click its emoji to choose one
+from the searchable color emoji grid. Playing a tile closes the sound settings.
 Hear Sounds plays clips through your listening device independently of your mic.
 Clips bypass microphone cleanup and voice effects and work without a microphone.
 Managed copies live in %LOCALAPPDATA%\Gate\Soundboard; originals are untouched.

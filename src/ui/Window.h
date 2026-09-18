@@ -33,6 +33,7 @@ private:
     bool beginControlPaint(HDC,const RECT&);
     void endControlPaint();
     void label(ID2D1RenderTarget*,const std::wstring&,D2D1_RECT_F,float,D2D1_COLOR_F,bool=false,DWRITE_TEXT_ALIGNMENT=DWRITE_TEXT_ALIGNMENT_LEADING,bool=false);
+    void drawEmoji(ID2D1RenderTarget*,const std::wstring&,D2D1_RECT_F,float);
     void drawItem(const DRAWITEMSTRUCT& item);
     void refreshStatus();
     void populate(HWND combo,const std::vector<Device>& list,const std::wstring& id);
@@ -78,6 +79,8 @@ private:
     HWND soundNav_{},effectToggle_{},intensity_{},hearMyself_{};
     HWND import_{},stopSounds_{},hearSounds_{},clipName_{},clipEmoji_{},closeClip_{},removeClip_{};
     HWND emojiPopup_{},emojiSearch_{},emojiList_{};
+    HIMAGELIST emojiImages_{};
+    unsigned emojiCategory_=0;
     int selectedClip_=-1;
     std::wstring importMessage_;
     std::vector<std::wstring> pendingDeletes_;
@@ -118,6 +121,7 @@ private:
     };
     // Small LRU, bounded even while resizing or importing large soundboards.
     std::list<CachedText> textLayouts_;
+    std::list<CachedText> emojiLayouts_;
     NOTIFYICONDATAW tray_{};
 };
 }

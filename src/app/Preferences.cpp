@@ -70,7 +70,22 @@ std::wstring Preferences::clipPath(const std::wstring& file){
     const auto folder=soundDirectory();return folder.empty()?std::wstring{}:folder+L"\\"+file;
 }
 bool Preferences::installStarterSounds(const std::wstring& directory){
-    if(starterPackVersion>=3)return false;
+    if(starterPackVersion>=4)return false;
+    struct Starter {unsigned resource;const wchar_t* file;const wchar_t* name;const wchar_t* emoji;};
+    constexpr Starter pack[]={
+        {201,L"starter-v1-air-horn.wav",L"Air Horn",L"📣"},
+        {203,L"starter-v1-drum-roll.wav",L"Drum Roll",L"🥁"},
+        {204,L"starter-v1-rimshot.wav",L"Rimshot",L"🥁"},
+        {205,L"starter-v1-buzzer.wav",L"Buzzer",L"🚨"},
+        {206,L"starter-v1-chime.wav",L"Chime",L"🔔"},
+        {207,L"starter-v1-sad-trombone.wav",L"Sad Trombone",L"🎺"}
+    };
+    // Upgrade generic starter icons once; keep any emoji the user has chosen.
+    for(auto& clip:clips){
+        if(clip.emoji!=L"🎵"&&!clip.emoji.empty())continue;
+        for(const auto& sound:pack)if(clip.file==sound.file){clip.emoji=sound.emoji;break;}
+    }
+    if(starterPackVersion==3){starterPackVersion=4;return true;}
     const bool updating=starterPackVersion>0;
     if(directory.empty())throw std::runtime_error("Soundboard directory unavailable");
     std::filesystem::create_directories(directory);
@@ -78,16 +93,7 @@ bool Preferences::installStarterSounds(const std::wstring& directory){
     std::filesystem::remove(removedFile);
     std::erase_if(clips,[](const SoundClip& clip){return clip.file==L"starter-v1-applause.wav";});
     // Existing libraries keep their imports, customizations, and removed tiles.
-    if(updating){starterPackVersion=3;return true;}
-    struct Starter {unsigned resource;const wchar_t* file;const wchar_t* name;};
-    constexpr Starter pack[]={
-        {201,L"starter-v1-air-horn.wav",L"Air Horn"},
-        {203,L"starter-v1-drum-roll.wav",L"Drum Roll"},
-        {204,L"starter-v1-rimshot.wav",L"Rimshot"},
-        {205,L"starter-v1-buzzer.wav",L"Buzzer"},
-        {206,L"starter-v1-chime.wav",L"Chime"},
-        {207,L"starter-v1-sad-trombone.wav",L"Sad Trombone"}
-    };
+    if(updating){starterPackVersion=4;return true;}
     const HMODULE module=GetModuleHandleW(nullptr);
     for(const auto& sound:pack){
         const auto resource=FindResourceW(module,MAKEINTRESOURCEW(sound.resource),RT_RCDATA);
@@ -108,9 +114,9 @@ bool Preferences::installStarterSounds(const std::wstring& directory){
             }
         }
         if(std::none_of(clips.begin(),clips.end(),[&](const SoundClip& clip){return clip.file==sound.file;}))
-            clips.push_back({sound.file,sound.name});
+            clips.push_back({sound.file,sound.name,sound.emoji});
     }
-    starterPackVersion=3;
+    starterPackVersion=4;
     return true;
 }
 }
