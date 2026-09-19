@@ -2,6 +2,7 @@
 #include "audio/Devices.h"
 #include "audio/Voice.h"
 #include "audio/Processing.h"
+#include "audio/AppAudio.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -12,11 +13,14 @@ struct Diagnostics {
     std::atomic<uint64_t> blocks{0}, discontinuities{0}, underruns{0}, overflows{0}, overruns{0}, recoveries{0};
     std::atomic<uint64_t> maxProcessingUs{0};
     std::atomic<float> inputLevel{0.f};
+    std::atomic<float> voiceOutputLevel{0.f},mediaOutputLevel{0.f};
 };
 struct EngineStatus {
     Devices devices;
     std::wstring playingClip, soundMessage;
     bool soundsActive=false;
+    bool mediaActive=false,mediaStarting=false;
+    std::wstring mediaName,mediaMessage;
     std::wstring microphoneId, listeningId;
     std::wstring routeMessage = L"Looking for audio devices...";
     std::wstring testMessage;
@@ -40,6 +44,10 @@ public:
     void setSoundboardVisible(bool visible) noexcept;
     void playClip(std::wstring id,std::wstring path);
     void stopClips();
+    void shareApp(AudioApp app);
+    void stopSharing();
+    void setMediaVolume(unsigned percent) noexcept;
+    void setMixLevels(unsigned microphone,unsigned media,bool muteMicrophone,bool muteMedia) noexcept;
     EngineStatus status() const;
     Diagnostics& diagnostics() noexcept { return diagnostics_; }
 private:

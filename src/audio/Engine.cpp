@@ -254,8 +254,13 @@ struct Engine::Impl {
     Handle wake{false}, quit{true}, captureStop{true}, mixerStop{true};
     SpscQueue<frameSize*12> microphoneQueue;
     ClipPlayer clips;
+    AppAudio media;
+    AudioApp requestedApp;
+    uint64_t mediaRevision=0,appliedMediaRevision=0;
+    bool mediaRequested=false;
+    std::atomic<uint32_t> mixLevels{100u|(80u<<8)};
     std::thread mixerWorker;
-    std::atomic<uint32_t> voiceParameters{packVoice({})};
+    VoiceMailbox voiceParameters;
     std::atomic<bool> hearSounds{true},hearVoice{false};
     std::atomic<bool> soundboardVisible{false};
     std::wstring requestedClip,requestedPath,activeClip;
@@ -283,6 +288,7 @@ struct Engine::Impl {
     void stopMixer() {
         SetEvent(mixerStop.value);
         if(mixerWorker.joinable())mixerWorker.join();
+        stats.voiceOutputLevel=0.f;stats.mediaOutputLevel=0.f;
     }
     void startMixer() {
         if(mixerWorker.joinable())return;
@@ -294,7 +300,8 @@ struct Engine::Impl {
             Handle timer;timer.value=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
             if(!timer.value){timer.value=CreateWaitableTimerW(nullptr,FALSE,nullptr);}
             if(!timer.value)return;
-            std::array<float,frameSize> mic{},voice{},sound{},toCable{},toListener{};
+            std::array<float,frameSize> mic{},voice{},sound{},app{},toCable{},toListener{};
+            VoiceParameters voiceSettings;
             LARGE_INTEGER frequency{},now{};QueryPerformanceFrequency(&frequency);QueryPerformanceCounter(&now);
             double next=double(now.QuadPart),period=double(frequency.QuadPart)/100.;
             bool primed=false;unsigned blocks=0;
@@ -307,10 +314,19 @@ struct Engine::Impl {
                     mic.fill(0);
                     if(microphoneQueue.pop(mic)<frameSize)primed=false;
                 }
-                effect->process(mic.data(),voice.data(),unpackVoice(voiceParameters.load()));
+                voiceParameters.read(voiceSettings);
+                effect->process(mic.data(),voice.data(),voiceSettings);
                 clips.read(sound.data(),frameSize);
+                media.read(app.data());
+                const auto levels=mixLevels.load(std::memory_order_relaxed);
+                const float voiceGain=(levels&(1u<<16))?0.f:float(levels&255u)/100.f;
+                const float appGain=(levels&(1u<<17))?0.f:float((levels>>8)&255u)/100.f;
                 mixAudio(voice.data(),sound.data(),toCable.data(),toListener.data(),frameSize,
-                    .8f,hearVoice.load(),hearSounds.load());
+                    .8f,hearVoice.load(),hearSounds.load(),app.data(),appGain,voiceGain);
+                float voicePeak=0.f,appPeak=0.f;
+                for(unsigned i=0;i<frameSize;++i){voicePeak=std::max(voicePeak,std::abs(voice[i]*voiceGain));appPeak=std::max(appPeak,std::abs(app[i]*appGain));}
+                stats.voiceOutputLevel=std::max(voicePeak,stats.voiceOutputLevel.load(std::memory_order_relaxed)*.88f);
+                stats.mediaOutputLevel=std::max(appPeak,stats.mediaOutputLevel.load(std::memory_order_relaxed)*.88f);
                 cable.push(toCable.data());listener.push(toListener.data());
                 // The mixer follows the input clock slowly. Outputs retain their
                 // independent OS clock correction. No samples are resampled here.
@@ -415,7 +431,7 @@ struct Engine::Impl {
             while (WaitForSingleObject(quit.value,0)!=WAIT_OBJECT_0) {
                 bool deviceEvent=devicesChanged.exchange(false);
                 if (deviceEvent) state.devices=enumerateDevices();
-                std::wstring mic, listening,clip,path; bool test, stopped;uint64_t revision;
+                std::wstring mic, listening,clip,path; bool test, stopped;uint64_t revision,appRevision;AudioApp app;
                 {
                     std::lock_guard lock(mutex);
                     if (firstSelection) {
@@ -425,7 +441,22 @@ struct Engine::Impl {
                     }
                     mic=requestedMic; listening=requestedListener; test=wantTest; stopped=paused||suspended;
                     state.paused=stopped;clip=requestedClip;path=requestedPath;revision=clipRevision;
+                    app=requestedApp;appRevision=mediaRevision;
                 }
+                if(stopped||appRevision!=appliedMediaRevision){
+                    stopMixer();media.stop();mediaRequested=false;state.mediaName.clear();state.mediaMessage.clear();
+                    if(stopped){std::lock_guard lock(mutex);requestedApp={};appliedMediaRevision=mediaRevision;}
+                    else {
+                        appliedMediaRevision=appRevision;
+                        if(app.processId){media.start(app);mediaRequested=true;state.mediaName=app.name;}
+                    }
+                }
+                if(mediaRequested&&media.finished()){
+                    state.mediaMessage=media.error();mediaRequested=false;
+                    stopMixer();media.stop();
+                }
+                state.mediaActive=mediaRequested&&media.active();
+                state.mediaStarting=mediaRequested&&!state.mediaActive;
                 if(stopped){
                     stopMixer();clips.stop();activeClip.clear();cable.stop();listener.stop();activeCable.clear();activeListener.clear();
                     {std::lock_guard lock(mutex);requestedClip.clear();requestedPath.clear();appliedClipRevision=clipRevision;}
@@ -497,7 +528,7 @@ struct Engine::Impl {
         } catch(HRESULT hr) { state.routeMessage=L"Audio initialization failed: "+errorMessage(hr); notify(state); }
           catch(...) { state.routeMessage=L"Audio initialization failed."; notify(state); }
         if(enumerator && notification) enumerator->UnregisterEndpointNotificationCallback(notification.Get());
-        stopMixer();clips.stop();listener.stop(); cable.stop(); stopCapture();
+        stopMixer();media.stop();clips.stop();listener.stop(); cable.stop(); stopCapture();
     }
 };
 Engine::Engine():impl_(std::make_unique<Impl>(diagnostics_)) {}
@@ -516,10 +547,10 @@ void Engine::selectListener(std::wstring id) {
     SetEvent(impl_->wake.value);
 }
 void Engine::setTest(bool enabled) { {std::lock_guard lock(impl_->mutex);impl_->wantTest=enabled;} SetEvent(impl_->wake.value); }
-void Engine::setPaused(bool paused) { {std::lock_guard lock(impl_->mutex);impl_->paused=paused;if(paused)impl_->wantTest=false;} SetEvent(impl_->wake.value); }
-void Engine::setSuspended(bool suspended) { {std::lock_guard lock(impl_->mutex);impl_->suspended=suspended;if(suspended)impl_->wantTest=false;} SetEvent(impl_->wake.value); }
+void Engine::setPaused(bool paused) { {std::lock_guard lock(impl_->mutex);impl_->paused=paused;if(paused){impl_->wantTest=false;impl_->requestedApp={};++impl_->mediaRevision;}} SetEvent(impl_->wake.value); }
+void Engine::setSuspended(bool suspended) { {std::lock_guard lock(impl_->mutex);impl_->suspended=suspended;if(suspended){impl_->wantTest=false;impl_->requestedApp={};++impl_->mediaRevision;}} SetEvent(impl_->wake.value); }
 void Engine::setParameters(Parameters p) noexcept { impl_->parameters=pack(p); }
-void Engine::setVoice(VoiceParameters p) noexcept {impl_->voiceParameters=packVoice(p);}
+void Engine::setVoice(VoiceParameters p) noexcept {impl_->voiceParameters.store(p);}
 void Engine::setHearSounds(bool hear) noexcept {impl_->hearSounds=hear;SetEvent(impl_->wake.value);}
 void Engine::setSoundboardVisible(bool visible) noexcept {impl_->soundboardVisible=visible;SetEvent(impl_->wake.value);}
 void Engine::playClip(std::wstring id,std::wstring path){
@@ -534,6 +565,21 @@ void Engine::stopClips(){
     SetEvent(impl_->wake.value);
 }
 EngineStatus Engine::status() const {std::lock_guard lock(impl_->mutex);return impl_->published;}
+void Engine::shareApp(AudioApp app){
+    {std::lock_guard lock(impl_->mutex);if(impl_->paused||impl_->suspended)return;impl_->requestedApp=std::move(app);++impl_->mediaRevision;}
+    SetEvent(impl_->wake.value);
+}
+void Engine::stopSharing(){
+    {std::lock_guard lock(impl_->mutex);impl_->requestedApp={};++impl_->mediaRevision;}
+    SetEvent(impl_->wake.value);
+}
+void Engine::setMediaVolume(unsigned percent) noexcept {
+    auto previous=impl_->mixLevels.load();
+    while(!impl_->mixLevels.compare_exchange_weak(previous,(previous&~(255u<<8))|(std::min(percent,100u)<<8))){}
+}
+void Engine::setMixLevels(unsigned microphone,unsigned media,bool muteMicrophone,bool muteMedia) noexcept {
+    impl_->mixLevels=std::min(microphone,100u)|(std::min(media,100u)<<8)|(uint32_t(muteMicrophone)<<16)|(uint32_t(muteMedia)<<17);
+}
 #ifdef GATE_DEVELOPER_PROBES
 // Developer verification uses the same output implementation with digital silence.
 // No microphone is opened and no user audio is captured by this probe.

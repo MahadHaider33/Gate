@@ -16,10 +16,13 @@ struct Parameters {
     bool suppression = true;
     bool gate = false;
     unsigned strength = 100;
-    int thresholdDb = -50;
+    float thresholdDb = -50.f;
 };
 uint32_t pack(Parameters p) noexcept;
 Parameters unpack(uint32_t value) noexcept;
+// UI scale follows signal amplitude. Audio processing still uses Q's decibels.
+float gateThresholdFromPercent(unsigned percent) noexcept;
+unsigned gateThresholdPercent(float thresholdDb) noexcept;
 
 class Processor {
 public:

@@ -27,14 +27,31 @@ Preferences Preferences::load() {
     }
     if(readDword(key,L"FeaturesVersion",0)==1){
         p.voice=unpackVoice(readDword(key,L"Voice",packVoice({})));
+        p.lastVoicePreset=p.voice.preset;
+        if(readDword(key,L"VoiceShortcutVersion",0)==1){
+            const auto last=readDword(key,L"LastVoicePreset",unsigned(p.lastVoicePreset));
+            if(last<voiceCount)p.lastVoicePreset=VoicePreset(last);
+            const auto shortcut=readDword(key,L"VoiceShortcut",p.voiceShortcut);
+            p.voiceShortcut=GlobalShortcut::valid(shortcut)?shortcut:0;
+        }
+        if(p.voice.preset!=VoicePreset::Normal)p.lastVoicePreset=p.voice.preset;
+        if(readDword(key,L"CustomVoiceVersion",0)==1){
+            HKEY custom{};
+            if(RegOpenKeyExW(key,L"CustomVoice",0,KEY_READ,&custom)==ERROR_SUCCESS){
+                for(unsigned i=0;i<voiceControlCount;++i){const auto& info=voiceControlInfo[i];p.voice.custom.values[i]=std::clamp(int32_t(readDword(custom,info.key,DWORD(info.initial))),info.min,info.max);}
+                RegCloseKey(custom);
+            }
+        }
         p.hearSounds=readDword(key,L"HearSounds",1)!=0;
         p.starterPackVersion=readDword(key,L"StarterPackVersion",0);
         const auto count=std::min(readDword(key,L"ClipCount",0),10000ul);
+        const bool clipShortcuts=readDword(key,L"ClipShortcutsVersion",0)==1;
         for(unsigned i=0;i<count;++i){
             HKEY clip{};const auto name=L"Clips\\"+std::to_wstring(i);
             if(RegOpenKeyExW(key,name.c_str(),0,KEY_READ,&clip)!=ERROR_SUCCESS)continue;
             SoundClip c;c.file=readString(clip,L"File");c.name=readString(clip,L"Name");
             const auto emoji=readString(clip,L"Emoji");if(!emoji.empty())c.emoji=emoji.substr(0,32);
+            if(clipShortcuts){const auto shortcut=readDword(clip,L"Shortcut",0);if(GlobalShortcut::valid(shortcut))c.shortcut=shortcut;}
             RegCloseKey(clip);if(!clipPath(c.file).empty())p.clips.push_back(std::move(c));
         }
     }
@@ -47,6 +64,12 @@ void Preferences::save(bool includeClips) const {
     number(L"Version",1);number(L"Processing",pack(processing));number(L"TrayExplained",trayExplained);
     string(L"Microphone",microphone);string(L"Listener",listener);
     number(L"FeaturesVersion",1);number(L"Voice",packVoice(voice));number(L"HearSounds",hearSounds);
+    number(L"VoiceShortcutVersion",1);number(L"VoiceShortcut",voiceShortcut);number(L"LastVoicePreset",unsigned(lastVoicePreset));
+    HKEY custom{};
+    if(RegCreateKeyExW(key,L"CustomVoice",0,nullptr,0,KEY_WRITE,nullptr,&custom,nullptr)==ERROR_SUCCESS){
+        for(unsigned i=0;i<voiceControlCount;++i){const auto& info=voiceControlInfo[i];const DWORD value=DWORD(std::clamp(voice.custom.values[i],info.min,info.max));RegSetValueExW(custom,info.key,0,REG_DWORD,reinterpret_cast<const BYTE*>(&value),sizeof(value));}
+        RegCloseKey(custom);number(L"CustomVoiceVersion",1);
+    }
     number(L"StarterPackVersion",starterPackVersion);
     if(!includeClips){RegCloseKey(key);return;}
     RegDeleteTreeW(key,L"Clips");
@@ -57,9 +80,11 @@ void Preferences::save(bool includeClips) const {
         auto str=[&](const wchar_t* n,const std::wstring& v){RegSetValueExW(child,n,0,REG_SZ,reinterpret_cast<const BYTE*>(v.c_str()),DWORD((v.size()+1)*sizeof(wchar_t)));};
         str(L"File",c.file);str(L"Name",c.name);
         str(L"Emoji",c.emoji);
+        const DWORD shortcut=GlobalShortcut::valid(c.shortcut)?c.shortcut:0;
+        RegSetValueExW(child,L"Shortcut",0,REG_DWORD,reinterpret_cast<const BYTE*>(&shortcut),sizeof(shortcut));
         RegCloseKey(child);
     }
-    number(L"ClipCount",DWORD(clips.size()));RegCloseKey(key);
+    number(L"ClipCount",DWORD(clips.size()));number(L"ClipShortcutsVersion",1);RegCloseKey(key);
 }
 std::wstring Preferences::soundDirectory(){
     PWSTR value=nullptr;if(FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&value)))return {};

@@ -14,10 +14,25 @@ namespace {
 void require(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
 void parameters(){
     for(unsigned strength=0;strength<=100;++strength)for(int threshold=-70;threshold<=-20;++threshold){
-        gate::Parameters p{strength%2==0,strength%3==0,strength,threshold};auto q=gate::unpack(gate::pack(p));
+        gate::Parameters p{strength%2==0,strength%3==0,strength,float(threshold)};auto q=gate::unpack(gate::pack(p));
         require(p.suppression==q.suppression&&p.gate==q.gate&&p.strength==q.strength&&p.thresholdDb==q.thresholdDb,"Parameter round trip");
     }
     require(gate::unpack(0xffffffff).thresholdDb==-20,"Corrupt settings are bounded");
+    // Preferences saved before the new scale must not change the audible cutoff.
+    for(int threshold=-70;threshold<=-20;++threshold){
+        const auto legacy=1u|(100u<<8)|(unsigned(threshold+70)<<16);
+        require(gate::unpack(legacy).thresholdDb==threshold,"Legacy gate cutoff preserved");
+    }
+    float previous=-71.f;
+    for(unsigned percent=0;percent<=100;++percent){
+        const auto threshold=gate::gateThresholdFromPercent(percent);
+        const auto restored=gate::unpack(gate::pack({false,true,0,threshold})).thresholdDb;
+        require(threshold>previous,"Every gate slider step raises the cutoff");
+        require(std::abs(restored-threshold)<.011f,"Fractional gate cutoff persists");
+        require(gate::gateThresholdPercent(restored)==percent,"Gate percentage survives saving");
+        previous=threshold;
+    }
+    require(gate::gateThresholdPercent(-25.f)>=55&&gate::gateThresholdPercent(-25.f)<=57,"Old 90 percent cutoff is near the middle");
 }
 void queue(){
     gate::SpscQueue<128> q;std::atomic<bool> failed=false;
@@ -39,6 +54,22 @@ void processor(){
     require(std::abs(out.back())<.0000001f,"Gate attenuates below threshold");
     in.fill(.1f);for(int frame=0;frame<30;++frame)processor.process(in.data(),out.data(),p);
     require(out.back()>.09f,"Gate opens above threshold");
+    // A moderate constant noise floor must close the gate after louder speech
+    // at the new midpoint. Test the real Q gate/envelopes, including hysteresis.
+    p={false,true,0,gate::gateThresholdFromPercent(50)};processor.prepare(p);
+    in.fill(.2f);for(int frame=0;frame<30;++frame)processor.process(in.data(),out.data(),p);
+    require(out.back()>.19f,"Speech opens gate at middle slider setting");
+    in.fill(.02f);for(int frame=0;frame<200;++frame)processor.process(in.data(),out.data(),p);
+    require(std::abs(out.back())<.000001f,"Moderate noise closes gate at middle slider setting");
+    p.thresholdDb=gate::gateThresholdFromPercent(10);
+    for(int frame=0;frame<30;++frame)processor.process(in.data(),out.data(),p);
+    require(out.back()>.019f,"Lowering cutoff opens for quiet input without restart");
+    p.thresholdDb=gate::gateThresholdFromPercent(50);
+    for(int frame=0;frame<200;++frame)processor.process(in.data(),out.data(),p);
+    require(std::abs(out.back())<.000001f,"Raising cutoff closes without restart");
+    p.gate=false;
+    for(int frame=0;frame<30;++frame)processor.process(in.data(),out.data(),p);
+    require(out.back()>.019f,"Disabling gate restores quiet input");
 }
 void resampling(){
     for(auto rate:{8000u,44100u,48000u,96000u,192000u}){

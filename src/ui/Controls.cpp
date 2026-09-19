@@ -79,11 +79,32 @@ void Window::drawIcon(ID2D1RenderTarget* target,unsigned icon,float x,float y,fl
         target->FillEllipse(D2D1::Ellipse(point(8,24),5*unit,3.7f*unit),brush.Get());
         target->FillEllipse(D2D1::Ellipse(point(22,21),5*unit,3.7f*unit),brush.Get());break;
     case 7:for(int row=0;row<2;++row)for(int col=0;col<2;++col)round(4.f+col*14,4.f+row*14,13.f+col*14,13.f+row*14,1);break;
+    case 8:case 9:
+        circle(12,10,6);round(3,20,21,29,5);
+        if(icon==8){line(27,5,27,20);line(23,16,27,20);line(31,16,27,20);}
+        else{line(27,5,27,20);line(23,9,27,5);line(31,9,27,5);}break;
+    case 10:
+        circle(16,17,11);circle(12,15,1,true);circle(20,15,1,true);line(12,22,20,22);line(13,5,16,2);line(16,2,19,5);break;
+    case 11:
+        round(6,10,26,29,5);line(6,13,3,3);line(3,3,12,10);line(26,13,29,3);line(29,3,20,10);
+        line(10,15,14,17);line(22,15,18,17);line(11,23,21,23);line(13,23,14,27);line(19,23,18,27);break;
+    case 12:
+        target->DrawEllipse(D2D1::Ellipse(point(16,15),11*unit,13*unit),brush.Get(),stroke);
+        line(8,12,13,17);line(24,12,19,17);line(14,23,18,23);break;
+    case 13:
+        round(7,3,25,29,4);line(12,7,20,7);line(12,24,20,24);line(12,13,12,18);line(16,11,16,20);line(20,13,20,18);break;
+    case 14:
+        circle(16,16,3,true);circle(16,16,8);line(3,4,3,28);line(29,4,29,28);line(3,4,8,4);line(24,28,29,28);break;
+    case 15:
+        drawIcon(target,0,x+size*.2f,y+size*.1f,size*.65f,color);line(2,8,6,11);line(27,8,31,4);line(28,16,32,16);line(1,20,5,18);break;
+    case 16:
+        for(int i=0;i<3;++i){const float cy=7.f+9*i,cx=i==1?11.f:22.f;line(3,cy,cx-3,cy);line(cx+3,cy,29,cy);circle(cx,cy,3);}break;
     default:break;
     }
 }
 
 void Window::invalidateSliderValue(HWND control){
+    if(isMediaFader(control)){RECT r{0,px(top(358)),px(contentWidth_),px(top(383))};InvalidateRect(content_,&r,FALSE);return;}
     RECT bounds{};GetWindowRect(control,&bounds);
     MapWindowPoints(nullptr,content_,reinterpret_cast<POINT*>(&bounds),2);
     bounds.bottom=bounds.top;bounds.top-=px(40);bounds.left=0;bounds.right=px(contentWidth_);
@@ -103,8 +124,9 @@ void Window::paintControl(HWND control,HDC dc) {
     if(!beginControlPaint(dc,bounds))return;
     auto* target=controlTarget_.Get();const auto& p=theme_.colors();
     const float w=bounds.right/scale(),h=bounds.bottom/scale();
-    const bool nav=control==microphoneNav_||control==voiceNav_||control==soundNav_;
-    const bool combo=control==input_||control==listener_;
+    if(paintMediaControl(control,target,w,h)){endControlPaint();return;}
+    const bool nav=control==microphoneNav_||control==voiceNav_||control==soundNav_||control==mediaNav_;
+    const bool combo=control==input_||control==listener_||control==mediaApp_;
     const bool slider=isSlider(control);
     const bool toggle=isToggle(control);
     const bool enabled=IsWindowEnabled(control)!=FALSE;
@@ -123,7 +145,7 @@ void Window::paintControl(HWND control,HDC dc) {
         const auto selected=SendMessageW(control,CB_GETCURSEL,0,0);
         wchar_t text[2048]{};
         if(selected!=CB_ERR)SendMessageW(control,CB_GETLBTEXT,selected,reinterpret_cast<LPARAM>(text));
-        else wcscpy_s(text,control==input_?L"Select a microphone":L"Select a listening device");
+        else wcscpy_s(text,control==mediaApp_?L"Select an app":control==input_?L"Select a microphone":L"Select a listening device");
         const float cy=h/2;
         if(control==input_){
             outline({17,cy-9,23,cy+2},3,p.secondary);
@@ -157,7 +179,7 @@ void Window::paintControl(HWND control,HDC dc) {
         brush->SetColor(enabled?p.accent:p.secondary);
         target->FillEllipse(D2D1::Ellipse({x,y},radius,radius),brush.Get());
     }else if(nav){
-        const bool selected=(control==microphoneNav_&&page_==Page::Microphone)||(control==voiceNav_&&page_==Page::Voice)||(control==soundNav_&&page_==Page::Soundboard);
+        const bool selected=(control==microphoneNav_&&page_==Page::Microphone)||(control==voiceNav_&&page_==Page::Voice)||(control==soundNav_&&page_==Page::Soundboard)||(control==mediaNav_&&page_==Page::Media);
         if(selected||hover)round({0,0,w,h},8,selected?p.selected:blend(p.sidebar,p.text,.035f));
         if(selected)round({0,10,3,h-10},1.5f,p.accent);
         const auto color=selected?p.accent:p.secondary;
@@ -170,6 +192,8 @@ void Window::paintControl(HWND control,HDC dc) {
             sink->AddBezier({{19,cy+11},{35,cy+11},{35,cy-1}});sink->EndFigure(D2D1_FIGURE_END_OPEN);sink->Close();
             brush->SetColor(color);target->DrawGeometry(shape.Get(),brush.Get(),1.6f);
             line(27,cy+8,27,cy+13,color);
+        }else if(control==mediaNav_){
+            drawIcon(target,6,15,cy-12,24,color);
         }else if(control==soundNav_){
             drawIcon(target,7,15,cy-12,24,color);
         }else{
@@ -198,10 +222,9 @@ void Window::paintControl(HWND control,HDC dc) {
             const unsigned preset=unsigned(voice-voiceTiles_.begin());
             round({.5f,.5f,w-.5f,h-.5f},8,selected?p.selected:hover?blend(p.card,p.text,.035f):p.card);
             outline({.5f,.5f,w-.5f,h-.5f},8,selected?p.accent:p.border);
-            drawIcon(target,preset,w/2-18,19,36,selected?p.accent:p.secondary);
+            drawIcon(target,preset<6?preset:preset+2,w/2-18,19,36,selected?p.accent:p.secondary);
             label(target,text,{12,62,w-12,86},15,p.text,true,DWRITE_TEXT_ALIGNMENT_CENTER);
-            constexpr const wchar_t* descriptions[]={L"Natural voice",L"Lower pitch",L"Higher pitch",L"Mechanical voice",L"Radio filter",L"Short echo"};
-            label(target,descriptions[preset],{12,90,w-12,111},12,p.secondary,false,DWRITE_TEXT_ALIGNMENT_CENTER);
+            label(target,voiceDescriptions[preset],{12,90,w-12,111},12,p.secondary,false,DWRITE_TEXT_ALIGNMENT_CENTER);
             if(selected){
                 brush->SetColor(p.accent);target->FillEllipse(D2D1::Ellipse({w-18,18},7,7),brush.Get());
                 line(w-21,18,w-19,20,p.buttonText,1.6f);line(w-19,20,w-15,15.5f,p.buttonText,1.6f);
@@ -255,6 +278,21 @@ void Window::drawItem(const DRAWITEMSTRUCT& item) {
 LRESULT CALLBACK Window::controlProcedure(HWND control,UINT message,WPARAM w,LPARAM l,UINT_PTR,DWORD_PTR data) {
     auto* self=reinterpret_cast<Window*>(data);
     const bool slider=self->isSlider(control);
+    const bool vertical=self->isMediaFader(control);
+    if(vertical&&message==WM_KEYDOWN&&IsWindowEnabled(control)){
+        int value=int(SendMessageW(control,TBM_GETPOS,0,0));
+        switch(w){
+        case VK_UP:case VK_RIGHT:++value;break;
+        case VK_DOWN:case VK_LEFT:--value;break;
+        case VK_PRIOR:value+=10;break;
+        case VK_NEXT:value-=10;break;
+        case VK_HOME:value=100;break;
+        case VK_END:value=0;break;
+        default:return DefSubclassProc(control,message,w,l);
+        }
+        value=std::clamp(value,0,100);SendMessageW(control,TBM_SETPOS,TRUE,value);
+        SendMessageW(GetParent(control),WM_VSCROLL,MAKEWPARAM(TB_THUMBTRACK,value),reinterpret_cast<LPARAM>(control));return 0;
+    }
     if(message==WM_PAINT){
         // Native trackbars invalidate only thumb fragments. Repaint the complete
         // control into Direct2D's DC buffer so partial updates cannot leave trails.
@@ -272,7 +310,7 @@ LRESULT CALLBACK Window::controlProcedure(HWND control,UINT message,WPARAM w,LPA
     }
     if(message==WM_MOUSEWHEEL){
         if(slider&&GetCapture()==control)return 0;
-        const bool open=(control==self->input_||control==self->listener_)&&SendMessageW(control,CB_GETDROPPEDSTATE,0,0);
+        const bool open=(control==self->input_||control==self->listener_||control==self->mediaApp_)&&SendMessageW(control,CB_GETDROPPEDSTATE,0,0);
         if(!open)return SendMessageW(self->hwnd_,message,w,l);
     }
     if(message==WM_MOUSEMOVE&&self->hoverControl_!=control){
@@ -283,29 +321,30 @@ LRESULT CALLBACK Window::controlProcedure(HWND control,UINT message,WPARAM w,LPA
     if(slider){
         auto moveThumb=[&](LPARAM point){
             RECT bounds{};GetClientRect(control,&bounds);
-            const float width=std::max(1.f,bounds.right/self->scale()-2*sliderEdge);
-            const float fraction=std::clamp((GET_X_LPARAM(point)/self->scale()-self->sliderGrab_-sliderEdge)/width,0.f,1.f);
+            const float width=std::max(1.f,(vertical?bounds.bottom:bounds.right)/self->scale()-2*sliderEdge);
+            const float position=((vertical?GET_Y_LPARAM(point):GET_X_LPARAM(point))/self->scale()-self->sliderGrab_-sliderEdge)/width;
+            const float fraction=std::clamp(vertical?1.f-position:position,0.f,1.f);
             const int low=int(SendMessageW(control,TBM_GETRANGEMIN,0,0));
             const int high=int(SendMessageW(control,TBM_GETRANGEMAX,0,0));
             const int value=low+int(std::lround(fraction*(high-low)));
             if(value!=SendMessageW(control,TBM_GETPOS,0,0)){
                 SendMessageW(control,TBM_SETPOS,TRUE,value);
-                SendMessageW(GetParent(control),WM_HSCROLL,MAKEWPARAM(TB_THUMBTRACK,value),reinterpret_cast<LPARAM>(control));
+                SendMessageW(GetParent(control),vertical?WM_VSCROLL:WM_HSCROLL,MAKEWPARAM(TB_THUMBTRACK,value),reinterpret_cast<LPARAM>(control));
             }
         };
         if((message==WM_LBUTTONDOWN||message==WM_LBUTTONDBLCLK)&&IsWindowEnabled(control)){
             RECT bounds{};GetClientRect(control,&bounds);
             const float x=GET_X_LPARAM(l)/self->scale(),y=GET_Y_LPARAM(l)/self->scale();
-            const float center=self->sliderThumbX(control);
+            const float center=vertical?sliderEdge+(bounds.bottom/self->scale()-2*sliderEdge)*(1.f-float(SendMessageW(control,TBM_GETPOS,0,0))/100.f):self->sliderThumbX(control);
             // Preserve the grab point on the handle; track clicks jump immediately.
-            self->sliderGrab_=std::abs(x-center)<=12.f&&std::abs(y-bounds.bottom/(2*self->scale()))<=12.f?x-center:0.f;
+            self->sliderGrab_=vertical?(std::abs(y-center)<=12.f?y-center:0.f):(std::abs(x-center)<=12.f&&std::abs(y-bounds.bottom/(2*self->scale()))<=12.f?x-center:0.f);
             SetFocus(control);SetCapture(control);moveThumb(l);
             InvalidateRect(control,nullptr,FALSE);self->invalidateSliderValue(control);return 0;
         }
         if(message==WM_MOUSEMOVE&&GetCapture()==control){moveThumb(l);return 0;}
         if(message==WM_LBUTTONUP&&GetCapture()==control){
             moveThumb(l);ReleaseCapture();
-            SendMessageW(GetParent(control),WM_HSCROLL,MAKEWPARAM(TB_ENDTRACK,0),reinterpret_cast<LPARAM>(control));return 0;
+            SendMessageW(GetParent(control),vertical?WM_VSCROLL:WM_HSCROLL,MAKEWPARAM(TB_ENDTRACK,0),reinterpret_cast<LPARAM>(control));return 0;
         }
         if((message==WM_CANCELMODE||message==WM_KILLFOCUS||(message==WM_ENABLE&&!w)||(message==WM_SHOWWINDOW&&!w))&&GetCapture()==control)
             ReleaseCapture();

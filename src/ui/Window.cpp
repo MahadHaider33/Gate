@@ -40,14 +40,22 @@ int Window::run(int show) {
     engine_.setVoice(preferences_.voice);engine_.setHearSounds(preferences_.hearSounds);
     engine_.start(hwnd_,preferences_.microphone,preferences_.listener,preferences_.processing);
     MSG msg{};
-    while(GetMessageW(&msg,nullptr,0,0)>0){
+    for(;;){
+        if(scrolling_&&scrollClock_){
+            const DWORD event=MsgWaitForMultipleObjectsEx(1,&scrollClock_,INFINITE,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+            if(event==WAIT_OBJECT_0)animateScroll();
+            else if(event==WAIT_FAILED){const float destination=scrollTarget_;stopScroll();moveScroll(destination);}
+            if(!PeekMessageW(&msg,nullptr,0,0,PM_REMOVE))continue;
+            if(msg.message==WM_QUIT)break;
+        }else if(GetMessageW(&msg,nullptr,0,0)<=0)break;
+        if(captureShortcut(msg))continue;
         if(msg.message==WM_KEYDOWN&&msg.wParam==VK_TAB)
             SendMessageW(hwnd_,WM_CHANGEUISTATE,MAKEWPARAM(UIS_CLEAR,UISF_HIDEFOCUS),0);
         if(!(emojiPopup_&&IsDialogMessageW(emojiPopup_,&msg))&&!IsDialogMessageW(hwnd_,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}
         // Native tab navigation must also bring off-screen controls into view.
         if(msg.message==WM_KEYDOWN && msg.wParam==VK_TAB){
             HWND focus=GetFocus();
-            if(focus && focus!=microphoneNav_ && focus!=voiceNav_ && focus!=soundNav_ && IsChild(hwnd_,focus)){
+            if(focus && focus!=microphoneNav_ && focus!=voiceNav_ && focus!=soundNav_ && focus!=mediaNav_ && IsChild(hwnd_,focus)){
                 RECT r{};GetWindowRect(focus,&r);MapWindowPoints(nullptr,content_,reinterpret_cast<POINT*>(&r),2);
                 if(r.bottom>px(viewportHeight_-12))scrollTo(scroll_+r.bottom/scale()-viewportHeight_+42,false);
                 else if(r.top<px(12))scrollTo(scroll_+r.top/scale()-12,false);
@@ -76,7 +84,7 @@ void Window::createControls() {
     voiceNav_=create(WC_BUTTONW,L"Voice Changer",BS_OWNERDRAW,VoiceNav);
     setup_=create(WC_BUTTONW,L"Get VB-CABLE",BS_OWNERDRAW,Setup);
     SendMessageW(strength_,TBM_SETRANGE,TRUE,MAKELPARAM(0,100));SendMessageW(strength_,TBM_SETPOS,TRUE,preferences_.processing.strength);
-    SendMessageW(threshold_,TBM_SETRANGE,TRUE,MAKELPARAM(0,100));SendMessageW(threshold_,TBM_SETLINESIZE,0,2);SendMessageW(threshold_,TBM_SETPOS,TRUE,(preferences_.processing.thresholdDb+70)*2);
+    SendMessageW(threshold_,TBM_SETRANGE,TRUE,MAKELPARAM(0,100));SendMessageW(threshold_,TBM_SETLINESIZE,0,1);SendMessageW(threshold_,TBM_SETPOS,TRUE,gateThresholdPercent(preferences_.processing.thresholdDb));
     SendMessageW(suppression_,BM_SETCHECK,preferences_.processing.suppression?BST_CHECKED:BST_UNCHECKED,0);
     SendMessageW(gate_,BM_SETCHECK,preferences_.processing.gate?BST_CHECKED:BST_UNCHECKED,0);
     EnableWindow(strength_,preferences_.processing.suppression);EnableWindow(threshold_,preferences_.processing.gate);
@@ -99,6 +107,7 @@ void Window::createControls() {
     for(auto control:{input_,listener_,suppression_,gate_,strength_,threshold_,test_,microphoneNav_,voiceNav_,setup_})
         SetWindowSubclass(control,controlProcedure,1,reinterpret_cast<DWORD_PTR>(this));
     createVoicePages();
+    createMediaPage();
     updateTheme();syncTest();
 }
 void Window::updateTheme() {
@@ -112,7 +121,10 @@ void Window::updateTheme() {
     boldFont_=CreateFontW(-px(16),0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
     fieldBrush_=CreateSolidBrush(rgb(p.field));
     for(auto h:{input_,listener_,suppression_,gate_,strength_,threshold_,test_,microphoneNav_,voiceNav_,setup_})if(h)SendMessageW(h,WM_SETFONT,reinterpret_cast<WPARAM>(font_),TRUE);
-    for(auto h:{input_,listener_}){SendMessageW(h,CB_SETITEMHEIGHT,WPARAM(-1),px(38));SendMessageW(h,CB_SETITEMHEIGHT,0,px(32));}
+    for(auto h:{input_,listener_,mediaApp_}){SendMessageW(h,CB_SETITEMHEIGHT,WPARAM(-1),px(38));SendMessageW(h,CB_SETITEMHEIGHT,0,px(32));}
+    SendMessageW(mediaApp_,CB_SETITEMHEIGHT,WPARAM(-1),px(51));
+    SendMessageW(mediaNav_,WM_SETFONT,reinterpret_cast<WPARAM>(font_),TRUE);
+    for(auto h:mediaControls_)SendMessageW(h,WM_SETFONT,reinterpret_cast<WPARAM>(font_),TRUE);
     updateFeatureTheme();
     target_.Reset();contentTarget_.Reset();controlTarget_.Reset();RedrawWindow(hwnd_,nullptr,nullptr,RDW_INVALIDATE|RDW_ALLCHILDREN);
 }
@@ -132,6 +144,8 @@ void Window::refreshStatus() {
     auto next=engine_.status();
     if(next==state_&&!testPending_)return;
     const auto previous=std::move(state_);state_=std::move(next);
+    syncMedia();
+    if(page_==Page::Media)InvalidateRect(content_,nullptr,FALSE);
     if(previous.devices.microphones!=state_.devices.microphones||previous.microphoneId!=state_.microphoneId)
         populate(input_,state_.devices.microphones,state_.microphoneId);
     if(previous.devices.listeners!=state_.devices.listeners||previous.listeningId!=state_.listeningId)
@@ -181,15 +195,15 @@ void Window::syncTest(){const bool active=testPending_?testRequested_:state_.tes
 void Window::updateTimer(){
     const bool prepare=IsWindowVisible(hwnd_)&&!IsIconic(hwnd_)&&page_==Page::Soundboard;
     if(prepare!=soundboardPrepared_){soundboardPrepared_=prepare;engine_.setSoundboardVisible(prepare);}
-    bool need=IsWindowVisible(hwnd_)&&!IsIconic(hwnd_)&&page_==Page::Microphone&&state_.capturing&&state_.testActive;if(need!=timerActive_){if(need)SetTimer(hwnd_,meterTimer,50,nullptr);else KillTimer(hwnd_,meterTimer);timerActive_=need;}}
+    bool need=IsWindowVisible(hwnd_)&&!IsIconic(hwnd_)&&((page_==Page::Microphone&&state_.capturing&&state_.testActive)||(page_==Page::Media&&(state_.capturing||state_.mediaActive)));if(need!=timerActive_){if(need)SetTimer(hwnd_,meterTimer,50,nullptr);else KillTimer(hwnd_,meterTimer);timerActive_=need;}}
 void Window::save(){SetTimer(hwnd_,saveTimer,400,nullptr);}
 void Window::flushSave(){
     KillTimer(hwnd_,saveTimer);
     const bool clipsChanged=savedClips_!=preferences_.clips;
     preferences_.save(clipsChanged);if(clipsChanged)savedClips_=preferences_.clips;
 }
-void Window::setPage(Page page){if(page_==page)return;commitClipName();if(emojiPopup_)DestroyWindow(emojiPopup_);page_=page;scroll_=scrollTarget_=0;scrolling_=false;KillTimer(hwnd_,3);layout();InvalidateRect(microphoneNav_,nullptr,FALSE);InvalidateRect(voiceNav_,nullptr,FALSE);InvalidateRect(soundNav_,nullptr,FALSE);updateTimer();}
-void Window::hide(){commitClipName();if(emojiPopup_)DestroyWindow(emojiPopup_);engine_.setTest(false);testRequested_=false;ShowWindow(hwnd_,SW_HIDE);updateTimer();if(!preferences_.trayExplained){
+void Window::setPage(Page page){if(page_==page)return;endShortcutCapture();stopScroll();commitClipName();if(emojiPopup_)DestroyWindow(emojiPopup_);page_=page;if(page==Page::Media)refreshApps();scroll_=scrollTarget_=0;layout();InvalidateRect(microphoneNav_,nullptr,FALSE);InvalidateRect(voiceNav_,nullptr,FALSE);InvalidateRect(soundNav_,nullptr,FALSE);InvalidateRect(mediaNav_,nullptr,FALSE);updateTimer();}
+void Window::hide(){endShortcutCapture();commitClipName();if(emojiPopup_)DestroyWindow(emojiPopup_);engine_.setTest(false);testRequested_=false;ShowWindow(hwnd_,SW_HIDE);updateTimer();if(!preferences_.trayExplained){
     wcscpy_s(tray_.szInfoTitle,L"Gate is still running");wcscpy_s(tray_.szInfo,L"Your microphone keeps working. Open Gate, pause processing, or exit from the tray icon.");tray_.uFlags=NIF_INFO;tray_.dwInfoFlags=NIIF_INFO;Shell_NotifyIconW(NIM_MODIFY,&tray_);preferences_.trayExplained=true;save();}}
 void Window::trayMenu(){POINT point{};GetCursorPos(&point);HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,openTray,L"Open Gate");AppendMenuW(menu,MF_STRING,pauseTray,paused_?L"Resume processing":L"Pause processing");AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,exitTray,L"Exit");SetForegroundWindow(hwnd_);auto command=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd_,nullptr);DestroyMenu(menu);if(command)SendMessageW(hwnd_,WM_COMMAND,command,0);PostMessageW(hwnd_,WM_NULL,0,0);}
 LRESULT Window::message(UINT msg,WPARAM w,LPARAM l) {
@@ -198,8 +212,19 @@ LRESULT Window::message(UINT msg,WPARAM w,LPARAM l) {
     case WM_CREATE:
         dpi_=GetDpiForWindow(hwnd_);theme_.connect(hwnd_);createControls();
         tray_.cbSize=sizeof(tray_);tray_.hWnd=hwnd_;tray_.uID=1;tray_.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray_.uCallbackMessage=trayMessage;tray_.hIcon=LoadIconW(instance_,MAKEINTRESOURCEW(101));wcscpy_s(tray_.szTip,L"Gate");Shell_NotifyIconW(NIM_ADD,&tray_);layout();return 0;
-    case WM_SIZE:if(w!=SIZE_MINIMIZED)layout();updateTimer();return 0;
-    case WM_SHOWWINDOW:updateTimer();break;
+    case WM_SIZE:if(w!=SIZE_MINIMIZED)layout();else stopScroll();updateTimer();return 0;
+    case WM_SHOWWINDOW:if(!w)stopScroll();updateTimer();break;
+    case WM_ACTIVATEAPP:if(!w)endShortcutCapture();break;
+    case WM_HOTKEY:{
+        if(capturingVoiceShortcut_||capturingClipShortcut_>=0)return 0;
+        const uint32_t chord=uint32_t(HIWORD(l)|(LOWORD(l)<<8));
+        if(w==voiceHotkeyId&&chord==preferences_.voiceShortcut)toggleVoiceShortcut();
+        else if(w>=clipHotkeyFirst&&w-clipHotkeyFirst<clipHotkeys_.size()){
+            const size_t index=size_t(w-clipHotkeyFirst);
+            if(clipHotkeys_[index]->key.active()&&chord==preferences_.clips[index].shortcut)triggerClip(index);
+        }
+        return 0;
+    }
     case WM_GETMINMAXINFO:reinterpret_cast<MINMAXINFO*>(l)->ptMinTrackSize={px(800),px(530)};return 0;
     case WM_DPICHANGED:{dpi_=HIWORD(w);auto* r=reinterpret_cast<RECT*>(l);SetWindowPos(hwnd_,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE);updateTheme();layout();return 0;}
     case WM_SETTINGCHANGE:case WM_THEMECHANGED:case themeChanged:updateTheme();return 0;
@@ -227,22 +252,27 @@ LRESULT Window::message(UINT msg,WPARAM w,LPARAM l) {
             scrollTo((GET_Y_LPARAM(l)/scale()-headerHeight-scrollGrab_)/(viewportHeight_-thumb)*maxScroll(),false);return 0;}break;
     case WM_LBUTTONUP:if(draggingScroll_){draggingScroll_=false;ReleaseCapture();InvalidateRect(hwnd_,nullptr,FALSE);return 0;}break;
     case WM_CAPTURECHANGED:draggingScroll_=false;break;
+    case WM_VSCROLL:
+        if(isMediaFader(reinterpret_cast<HWND>(l))){
+            const auto value=unsigned(SendMessageW(reinterpret_cast<HWND>(l),TBM_GETPOS,0,0));
+            if(reinterpret_cast<HWND>(l)==mediaVolume_)mediaVolumePercent_=value;else mediaMicPercent_=value;
+            applyMixLevels();return 0;
+        }break;
     case WM_HSCROLL:
         if(featureSlider(reinterpret_cast<HWND>(l)))return 0;
         if(reinterpret_cast<HWND>(l)==strength_)preferences_.processing.strength=unsigned(SendMessageW(strength_,TBM_GETPOS,0,0));
         if(reinterpret_cast<HWND>(l)==threshold_){
-            preferences_.processing.thresholdDb=(int(SendMessageW(threshold_,TBM_GETPOS,0,0))+1)/2-70;
-            SendMessageW(threshold_,TBM_SETPOS,TRUE,(preferences_.processing.thresholdDb+70)*2);
+            preferences_.processing.thresholdDb=gateThresholdFromPercent(unsigned(SendMessageW(threshold_,TBM_GETPOS,0,0)));
         }
         engine_.setParameters(preferences_.processing);save();
         invalidateSliderValue(reinterpret_cast<HWND>(l));return 0;
     case WM_TIMER:
         if(w==saveTimer)flushSave();
         else if(w==3)animateScroll();
-        else if(w==meterTimer){RECT r{px(198),px(top(120)),px(contentWidth_),px(top(154))};InvalidateRect(content_,&r,FALSE);}return 0;
+        else if(w==meterTimer){if(page_==Page::Media)invalidateMediaMeters();else {RECT r{px(198),px(top(120)),px(contentWidth_),px(top(154))};InvalidateRect(content_,&r,FALSE);}}return 0;
     case audioChanged:refreshStatus();return 0;
     case WM_COMMAND:
-        if(featureCommand(LOWORD(w),HIWORD(w)))return 0;
+        if(mediaCommand(LOWORD(w),HIWORD(w))||featureCommand(LOWORD(w),HIWORD(w)))return 0;
         switch(LOWORD(w)){
         case MicNav:setPage(Page::Microphone);break;
         case VoiceNav:setPage(Page::Voice);break;
@@ -262,7 +292,7 @@ LRESULT Window::message(UINT msg,WPARAM w,LPARAM l) {
     case WM_CLOSE:hide();return 0;
     case WM_QUERYENDSESSION:return TRUE;
     case WM_ENDSESSION:if(w)DestroyWindow(hwnd_);return 0;
-    case WM_DESTROY:commitClipName();engine_.stop();for(const auto& path:pendingDeletes_)DeleteFileW(path.c_str());flushSave();Shell_NotifyIconW(NIM_DELETE,&tray_);if(font_)DeleteObject(font_);if(boldFont_)DeleteObject(boldFont_);if(fieldBrush_)DeleteObject(fieldBrush_);PostQuitMessage(0);return 0;
+    case WM_DESTROY:capturingVoiceShortcut_=false;capturingClipShortcut_=-1;voiceHotkey_.clear();clipHotkeys_.clear();stopScroll();if(scrollClock_){CloseHandle(scrollClock_);scrollClock_=nullptr;}commitClipName();engine_.stop();for(const auto& path:pendingDeletes_)DeleteFileW(path.c_str());flushSave();Shell_NotifyIconW(NIM_DELETE,&tray_);if(font_)DeleteObject(font_);if(boldFont_)DeleteObject(boldFont_);if(fieldBrush_)DeleteObject(fieldBrush_);PostQuitMessage(0);return 0;
     }
     return DefWindowProcW(hwnd_,msg,w,l);
 }

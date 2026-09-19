@@ -5,13 +5,28 @@
 using namespace cycfi::q::literals;
 namespace gate {
 uint32_t pack(Parameters p) noexcept {
+    const float threshold=std::isfinite(p.thresholdDb)?std::clamp(p.thresholdDb,-70.f,-20.f):-50.f;
+    const auto hundredths=uint32_t(std::lround((threshold+70.f)*100.f));
+    // Keep the original whole-dB byte. The formerly unused top byte stores
+    // hundredths, so existing preferences retain exactly the same cutoff.
     return uint32_t(p.suppression) | (uint32_t(p.gate) << 1)
         | (std::min(p.strength, 100u) << 8)
-        | (uint32_t(std::clamp(p.thresholdDb, -70, -20) + 70) << 16);
+        | ((hundredths/100) << 16) | ((hundredths%100) << 24);
 }
 Parameters unpack(uint32_t v) noexcept {
     return {bool(v & 1), bool(v & 2), std::min((v >> 8) & 255, 100u),
-            int(std::min((v >> 16) & 255, 50u)) - 70};
+            std::min(float((v >> 16) & 255)+float(std::min(v >> 24,99u))/100.f,50.f)-70.f};
+}
+float gateThresholdFromPercent(unsigned percent) noexcept {
+    const double low=cycfi::q::lin_double(-70_dB),high=cycfi::q::lin_double(-20_dB);
+    const double amplitude=low+(high-low)*std::min(percent,100u)/100.0;
+    return std::clamp(float(cycfi::q::lin_to_db(amplitude).rep),-70.f,-20.f);
+}
+unsigned gateThresholdPercent(float thresholdDb) noexcept {
+    const double low=cycfi::q::lin_double(-70_dB),high=cycfi::q::lin_double(-20_dB);
+    const float threshold=std::isfinite(thresholdDb)?std::clamp(thresholdDb,-70.f,-20.f):-50.f;
+    const double fraction=(cycfi::q::lin_double(cycfi::q::dB(threshold))-low)/(high-low);
+    return unsigned(std::clamp(std::lround(fraction*100.0),0l,100l));
 }
 Processor::Processor() : mix_(10_ms, 10_ms, float(sampleRate)),
     detector_(30_ms, float(sampleRate)), gain_(5_ms, 150_ms, float(sampleRate)),
